@@ -52,7 +52,7 @@ reset:
   lda #$bf	; volume
   sta $4000
 forever:
-  jmp reset
+  jmp forever
 
 nmi:
   rti ; Return from the NMI (NTSC refresh interrupt)
