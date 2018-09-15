@@ -15,6 +15,12 @@ installed.  My preferred emulator/debugger is
 [mednafen](https://mednafen.github.io/releases/), which on Ubuntu systems can be
 installed with a simple `sudo apt-get install mednafen`.
 
+My latest example code will always live on the master branch.  To see earlier
+demos/labs, please look at the labXX branches.  Current ones include:
+
+Lab 1: Hello World!
+Lab 2: Drawing a background color
+
 To build and run:
 ```
 make

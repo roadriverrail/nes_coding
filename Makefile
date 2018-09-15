@@ -1,7 +1,7 @@
 SRCDIR = src
 OBJDIR = obj
 BINDIR = bin
-TARGET = helloworld.nes
+TARGET = bgpalette.nes
 
 SOURCES := $(wildcard $(SRCDIR)/*.asm)
 OBJECTS := $(SOURCES:$(SRCDIR)/%.asm=$(OBJDIR)/%.o)
