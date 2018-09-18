@@ -11,15 +11,19 @@ These are developed on KDE Neon (Linux), and the Makefile may not work for
 Windows.
 
 You will need a copy of [cc65](https://github.com/cc65/cc65) built and
-installed.  My preferred emulator/debugger is
-[mednafen](https://mednafen.github.io/releases/), which on Ubuntu systems can be
-installed with a simple `sudo apt-get install mednafen`.
+installed.  My preferred emulator/debugger is [fceux](http://www.fceux.com) under 
+Wine, and **NOT** the one under Linux, as their Windows release has a powerful
+set of debugging tools available.  With them, you can inspect pattern and name tables!
+
+Alternatively, I'd recommend [mednafen](https://mednafen.github.io/releases/), 
+which on Ubuntu systems can be installed with a simple `sudo apt-get install mednafen`.
 
 My latest example code will always live on the master branch.  To see earlier
 demos/labs, please look at the labXX branches.  Current ones include:
 
-Lab 1: Hello World!
-Lab 2: Drawing a background color
+* Lab 1: Hello World!
+* Lab 2: Drawing a background color
+* Lab 3: Pattern, name, and attribute tables
 
 To build and run:
 ```

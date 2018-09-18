@@ -1,7 +1,7 @@
 SRCDIR = src
 OBJDIR = obj
 BINDIR = bin
-TARGET = bgpalette.nes
+TARGET = background.nes
 
 SOURCES := $(wildcard $(SRCDIR)/*.asm)
 OBJECTS := $(SOURCES:$(SRCDIR)/%.asm=$(OBJDIR)/%.o)
@@ -23,5 +23,5 @@ $(OBJECTS): $(OBJDIR)/%.o : $(SRCDIR)/%.asm
 
 .PHONY: clean
 clean:
-	@$(rm) $(BINDIR)/$(TARGET)
+	@$(rm) $(BINDIR)/*
 	@$(rm) $(OBJECTS)
