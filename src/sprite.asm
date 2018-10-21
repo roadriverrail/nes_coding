@@ -1,24 +1,58 @@
-; Drawing static sprites
-; Now that we can confirm the palettes, pattern table, and nametable loading
-; are all working, we can work with the next part of the NES PPU-- the sprite
-; subsystem.
+; Drawing sprite animation
 ;
-; Sprites are controlled by the Object Attribute Memory (OAM).  There are 64
-; available entries in the OAM, with each specifying the coordinates and
-; pattern for the sprite.  Sprites may be layered in front of or behind the
-; background, too (see Super Mario Bros 3 for a classic example of behind-the-
-; background sprite use).
+; Since we previously drew a sprite by allocating its 6 tiles in the Object
+; Attribute Memory (OAM), this time we get fancy and make it animate a little.
+; Specifically, I'm using the 4-cell walk animation for the little person
+; that was already laying around in the pattern table.
 ;
-; Technically, you can write to the OAM using addresses $2003 and $2004, called
-; OAMADDR and OAMDATA, but this is not commonly done because address $4014
-; manages a direct memory access (DMA) controller that can copy a complete OAM
-; table from the page of your choice in memory.  By convention, most NES coders
-; use $0200, so writing 2 to $4014 triggers a dump into the PPU's OMA table.
-; The CPU is stalled during this transfer, so you need only make the write and
-; then carry on with the code.
+; There are, assurredly, more efficient ways to implement this, but this one
+; was coded up with the layout of the pattern table in mind.  The pattern
+; table layout is really more of the "easy to reason about" sort rather than
+; one chosen for tighter code.
+;
+; In order to load the sprite, we're now using a subroutine called
+; "load_sprite" which knows how to convert the current frame number and an
+; initial x and y coordinate and load a 2x3 tile sprite from them.  You'll
+; notice that this information is basically "passed" using "global variables."
+; The 6502 has limited registers making the use of the stack for parameter
+; passing pretty tricky.  Effective parameter passing is probably a lab on
+; its own, so I skipped it.
+;
+; Because the pattern table entries needed to draw the sprite correctly are
+; not arranged in a linear way, I created a little array called "anim" which
+; describes each frame of the animation in a way that's coherent to the
+; algorithm used in load_sprite.  It takes 6 pattern table entries to draw
+; the character, so advancing to the next step in the animation is a matter
+; of adding different multiples of 6 to "anim".
+;
+; To animate, you must change the image as time progresses, meaning you also
+; need a timer.  This is where the other major point of this lab comes in--
+; the non-maskable interrupt (NMI).  The NMI fires every time the PPU starts
+; drawing another frame on the TV screen.  This gives us a "heartbeat" for our
+; code and also serves as a general sense of time.  NTSC refreshes 60 fields
+; (half-frames) per second, so we know that each trigger of the NMI is 1/60th
+; of a second, and we can therefore decide how long to devote to each part
+; of an animation.
+;
+; Also kindly note that we go ahead and do the OAM DMA immediately at the
+; beginning of the NMI hander.  This is because the NMI signals the beginning
+; of something called "vertical blanking" in the NTSC and PAL standards.  The
+; OAM must be ready to go at end of vertical blanking so the image can be put
+; on the screen, so we do it first and make sure we don't delay.  After that,
+; we set up the next frame of animation.
+;
+; Finally...this is the first lab where we need RAM in order to track changing
+; variables!  Astute observers might have noticed that all the memory we've
+; declared up to this point has been RAM.  Since the variables we need are few,
+; I've declared them in the "zero page", which is a RAM region already
+; made available by the cc65 default NES configuration.  This is all a fancy
+; way of saying that the first 256 bytes of addressable space are RAM, and
+; because they're the first 256 bytes, the 6502 can fetch them very quickly.
+
 
 .define SPRITE_PAGE  $0200
 
+.define PPUCTRL      $2000
 .define PPUMASK      $2001
 .define PPUSTATUS    $2002
 .define PPUADDR      $2006
@@ -47,6 +81,20 @@
                  ;
                  ; Note the header is 16 bytes but the nes.cfg will zero-pad for us.
 
+; "zero page" RAM
+; This is where we're storing our mutable state.
+.segment "ZEROPAGE"
+current_frame:
+  .byte 0
+sprite_x:
+  .byte 0
+sprite_y:
+  .byte 0
+frame_count:
+  .byte 0
+
+
+
 ; code ROM segment
 ; all code and on-ROM program data goes here
 
@@ -62,27 +110,23 @@ vwait2:
   bit PPUSTATUS
   bpl vwait2     ; at this point, about 57165 cycles have passed
 
-  ; Interesting little fact I learned along the way.  Because it takes two
-  ; stores on PPUADDR to move its pointer, it's good practice to start all of
-  ; your PPUADDR use with a peek at PPUSTATUS since this resets its "latch"
-  ; and ensures you're addressing the address you expect.
-  ; Technically, we don't need this because we did it in the reset code, but
-  ; it's a neat little thing to mention here
+; Interesting little fact I learned along the way.  Because it takes two
+; stores on PPUADDR to move its pointer, it's good practice to start all of
+; your PPUADDR use with a peek at PPUSTATUS since this resets its "latch"
+; and ensures you're addressing the address you expect.
+; Technically, we don't need this because we did it in the reset code, but
+; it's a neat little thing to mention here
 
   bit PPUSTATUS
 
-  ; load the palettes
+; load the palettes
   lda #BGPALETTE_HI
   sta PPUADDR
   lda #BGPALETTE_LO
   sta PPUADDR
 
-  ; prep the loop
+; prep the loop
   ldx #0
-
-; the palette loop now loads 8 palettes; 4 are for the background
-; tiles and 4 are for sprites.  Before working with sprites, you
-; must set sprite palette colors, or you'll have a bad time
 
 paletteloop:
   lda bgpalette, X ; load from the bgpalette array
@@ -111,14 +155,6 @@ attrloop:
   dex
   bne attrloop
 
-; Now for the meat of this lab-- making a sprite.  This makes a
-; basic character using tiles we already have at hand from last lab's
-; pattern table.  Note that the character is made up of six 8x8 tiles
-; and thus it takes six entries in the OAM to draw him.  It's common
-; to think of "sprite" as "character," but on this early hardware,
-; all sprites are fixed sizes expressed in either 8x8 or 8x16 tiles.
-; So those 64 sprites don't go as far as it might seem!
-
 ; zero out the OAM DMA shadow page
   ldx #$FF
   lda $0
@@ -127,86 +163,32 @@ zero_oam:
   dex
   bne zero_oam
 
-; refresh our index register...we're going to make heavy use of it
-; now...
+; Set up the sprite's base x and y coordinates
+; and frame index (i.e. where in the animation we are)
+; and then call load_sprite to do the hard work
 
-  ldx #0
+  lda #$7F
+  sta sprite_x
+  sta sprite_y
+  lda #0
+  sta current_frame
+  lda #0
+  sta frame_count
+; Load the sprite
+  jsr load_sprite
 
-; head
-  lda #$7F             ; Y coordinate
-  sta SPRITE_PAGE, X
-  inx
-  lda #$A0             ; Pattern bank 0, tile A0 (A1 is bottom)
-  sta SPRITE_PAGE, X
-  inx
-  lda #$00             ; No flipping, in front of background, palette 0  
-  sta SPRITE_PAGE, X
-  inx
-  lda #$7F             ; X coordinate
-  sta SPRITE_PAGE, X
-  inx
-  lda #$7F             ; Y coordinate
-  sta SPRITE_PAGE, X
-  inx
-  lda #$A1             ; Pattern bank 0, tile A0 (A1 is bottom)
-  sta SPRITE_PAGE, X
-  inx
-  lda #$00             ; No flipping, in front of background, palette 0  
-  sta SPRITE_PAGE, X
-  inx
-  lda #$87             ; X coordinate
-  sta SPRITE_PAGE, X
-  inx
-; torso
-  lda #$87             ; Y coordinate
-  sta SPRITE_PAGE, X
-  inx
-  lda #$B0             ; Pattern bank 0, tile A0 (A1 is bottom)
-  sta SPRITE_PAGE, X
-  inx
-  lda #$00             ; No flipping, in front of background, palette 0  
-  sta SPRITE_PAGE, X
-  inx
-  lda #$7F             ; X coordinate
-  sta SPRITE_PAGE, X
-  inx
-  lda #$87             ; Y coordinate
-  sta SPRITE_PAGE, X
-  inx
-  lda #$B1             ; Pattern bank 0, tile A0 (A1 is bottom)
-  sta SPRITE_PAGE, X
-  inx
-  lda #$00             ; No flipping, in front of background, palette 0  
-  sta SPRITE_PAGE, X
-  inx
-  lda #$87             ; X coordinate
-  sta SPRITE_PAGE, X
-  inx
-; feet
-  lda #$8F             ; Y coordinate
-  sta SPRITE_PAGE, X
-  inx
-  lda #$C0             ; Pattern bank 0, tile A0 (A1 is bottom)
-  sta SPRITE_PAGE, X
-  inx
-  lda #$00             ; No flipping, in front of background, palette 0  
-  sta SPRITE_PAGE, X
-  inx
-  lda #$7F             ; X coordinate
-  sta SPRITE_PAGE, X
-  inx
-  lda #$8F             ; Y coordinate
-  sta SPRITE_PAGE, X
-  inx
-  lda #$C1             ; Pattern bank 0, tile A0 (A1 is bottom)
-  sta SPRITE_PAGE, X
-  inx
-  lda #$00             ; No flipping, in front of background, palette 0  
-  sta SPRITE_PAGE, X
-  inx
-  lda #$87             ; X coordinate
-  sta SPRITE_PAGE, X
+; Enable background and sprite rendering.
+  lda #$1e
+  sta PPUMASK
 
+; generate NMI
+  lda #$80
+  sta PPUCTRL
+
+forever:
+  jmp forever
+
+nmi:
 ; OAM DMA must always be a transfer from address XX00-XXFF, so we write
 ; the value of XX (in this case, 2) to OAM_DMA ($4014) to trigger the
 ; transfer
@@ -214,17 +196,86 @@ zero_oam:
   lda #OAM_PAGE
   sta OAM_DMA 
 
-; Enable background and sprite rendering.
-  lda #$1e
-  sta PPUMASK
+; Here we keep a count of the NMIs as they come in.  Until we count 15
+; of them, which is roughly a quarter second, just keep holding on the
+; existing sprite.
+  inc frame_count
+  lda frame_count
+  cmp #15
+  bne done
+  lda #0
+  sta frame_count
+
+; We counted 15 NMIs, so let's update the animation frame and
+; make the little character walk in place
+  lda current_frame
+  clc                   ; NEVER forget to clear the carry flag before adding
+  adc #6                ; Each frame is an offset of a multiple of 6
+  cmp #24               ; After 4 frames, wrap around (4*6 = 24)
+  bne dont_cycle_anim
+  lda #0
+dont_cycle_anim:
+  sta current_frame
+done:
+  jsr load_sprite
+  rti                   ; Return from the NMI (NTSC refresh interrupt)
 
 
 
-forever:
-  jmp forever
-
-nmi:
-  rti ; Return from the NMI (NTSC refresh interrupt)
+; load_sprite consults current_frame to determine the offset into anim
+; and then draws the data in that row of anim into a 2x3 rectangle
+.proc load_sprite
+  ldx #0
+  ldy current_frame
+  lda #$7F
+  sta sprite_x
+  lda #$7F
+  sta sprite_y
+load_loop:
+; First of two cells
+  lda sprite_y
+  sta SPRITE_PAGE, X
+  inx
+  lda anim, Y
+  iny
+  sta SPRITE_PAGE, X
+  inx
+  lda #$00
+  sta SPRITE_PAGE, X
+  inx
+  lda sprite_x
+  sta SPRITE_PAGE, X
+  clc
+  adc #7               ; move to right cell
+  sta sprite_x
+  inx
+; Second of two cells
+  lda sprite_y
+  sta SPRITE_PAGE, X
+  clc
+  adc #7
+  sta sprite_y
+  inx
+  lda anim, Y
+  iny
+  sta SPRITE_PAGE, X
+  inx
+  lda #$00
+  sta SPRITE_PAGE, X
+  inx
+  lda sprite_x
+  sta SPRITE_PAGE, X
+  sbc #7              ; return to the left cell
+  sta sprite_x
+  inx
+;; Loop if we haven't loaded the full sprite
+  cpx #24
+  bne load_loop
+  lda sprite_y
+  sbc #14
+  sta sprite_y
+  rts
+.endproc
 
 
 ; The background colors are, in order:
@@ -238,12 +289,31 @@ bgpalette:
   .byte $0F, $15, $22, $20 ; palette 1
   .byte $0F, $15, $22, $20 ; palette 2
   .byte $0F, $15, $22, $20 ; palette 3
+
+; The foreground/sprite colors are:
+; $0F: black
+; $07: dark brown
+; $19: drab green
+; $20: white
+
 spritepalette:
   .byte $0F, $07, $19, $20 ; palette 0
   .byte $0F, $07, $19, $20 ; palette 1
   .byte $0F, $07, $19, $20 ; palette 2
   .byte $0F, $07, $19, $20 ; palette 3
 
+; This describes each "frame" or "cell" of the walk animation.  I decided to
+; write out an animation table rather than alter the pattern table.  This
+; means that load_sprite is a little less efficient than it probably ought be,
+; but makes the pattern table easier to visually think about in a debugger
+; like fceux.  Each byte here is an address in the pattern table; you'll
+; recognize them from the previous lab.
+
+anim:
+  .byte $A0, $A1, $B0, $B1, $C0, $C1 ; frame 1
+  .byte $A2, $A3, $B2, $B3, $C2, $C3 ; frame 2
+  .byte $A4, $A5, $B4, $B5, $C4, $C5 ; frame 3
+  .byte $A6, $A7, $B6, $B7, $C6, $C7 ; frame 4
 
 ; vectors declaration
 .segment "VECTORS"

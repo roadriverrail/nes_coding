@@ -1,7 +1,7 @@
 SRCDIR = src
 OBJDIR = obj
 BINDIR = bin
-TARGET = sprite.nes
+TARGET = anim.nes
 
 SOURCES := $(wildcard $(SRCDIR)/*.asm)
 OBJECTS := $(SOURCES:$(SRCDIR)/%.asm=$(OBJDIR)/%.o)
