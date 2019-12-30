@@ -24,6 +24,8 @@ demos/labs, please look at the labXX branches.  Current ones include:
 * Lab 1: Hello World!
 * Lab 2: Drawing a background color
 * Lab 3: Pattern, name, and attribute tables
+* Lab 4: Drawing sprites
+* Lab 5: Animating sprites
 
 To build and run:
 ```
