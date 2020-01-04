@@ -87,9 +87,9 @@
 current_frame:
   .byte 0
 sprite_x:
-  .byte 0
+  .byte $7F
 sprite_y:
-  .byte 0
+  .byte $7F
 frame_count:
   .byte 0
 
@@ -167,9 +167,6 @@ zero_oam:
 ; and frame index (i.e. where in the animation we are)
 ; and then call load_sprite to do the hard work
 
-  lda #$7F
-  sta sprite_x
-  sta sprite_y
   lda #0
   sta current_frame
   lda #0
@@ -207,7 +204,7 @@ nmi:
   sta frame_count
 
 ; We counted 15 NMIs, so let's update the animation frame and
-; make the little character walk in place
+; make the little character walk
   lda current_frame
   clc                   ; NEVER forget to clear the carry flag before adding
   adc #6                ; Each frame is an offset of a multiple of 6
@@ -216,6 +213,14 @@ nmi:
   lda #0
 dont_cycle_anim:
   sta current_frame
+
+
+  lda sprite_x
+  clc
+  adc #4
+  sta sprite_x
+dont_reset_x:
+  sta sprite_x
 done:
   jsr load_sprite
   rti                   ; Return from the NMI (NTSC refresh interrupt)
@@ -227,8 +232,6 @@ done:
 .proc load_sprite
   ldx #0
   ldy current_frame
-  lda #$7F
-  sta sprite_x
   lda #$7F
   sta sprite_y
 load_loop:
@@ -265,6 +268,7 @@ load_loop:
   inx
   lda sprite_x
   sta SPRITE_PAGE, X
+  sec
   sbc #7              ; return to the left cell
   sta sprite_x
   inx
@@ -272,6 +276,7 @@ load_loop:
   cpx #24
   bne load_loop
   lda sprite_y
+  sec
   sbc #14
   sta sprite_y
   rts
