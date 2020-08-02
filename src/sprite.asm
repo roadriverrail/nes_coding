@@ -1,53 +1,31 @@
-; Drawing sprite animation
+; Audio Processing Unit (APU) Basics
 ;
-; Since we previously drew a sprite by allocating its 6 tiles in the Object
-; Attribute Memory (OAM), this time we get fancy and make it animate a little.
-; Specifically, I'm using the 4-cell walk animation for the little person
-; that was already laying around in the pattern table.
+; This lab introduces some very basic code for initializing the RP2A03 APU
+; (used by the NTSC NES) and generating a single sound.  Again, this is done
+; not with a focus on efficacy or efficiency but instead for readability and
+; documentation focused on explaining the roles of various registers.
 ;
-; There are, assurredly, more efficient ways to implement this, but this one
-; was coded up with the layout of the pattern table in mind.  The pattern
-; table layout is really more of the "easy to reason about" sort rather than
-; one chosen for tighter code.
+; First off, there's the initialization of the registers to clear, known
+; states.  This is done in the main routine prior to turning on the NMI.
+; recall from previous materials that the NMI provides a heartbeat for the
+; video processing and display, and as such, it's better to do all
+; initialization prior to turning on the NMI.  Since we're going to be playing
+; only one (pretty ugly) sound, we also go ahead and configure that in the
+; main intitialization code, too.
 ;
-; In order to load the sprite, we're now using a subroutine called
-; "load_sprite" which knows how to convert the current frame number and an
-; initial x and y coordinate and load a 2x3 tile sprite from them.  You'll
-; notice that this information is basically "passed" using "global variables."
-; The 6502 has limited registers making the use of the stack for parameter
-; passing pretty tricky.  Effective parameter passing is probably a lab on
-; its own, so I skipped it.
+; Essentially, making a sound through the synthesizers works in a common way
+; across all of them: you write in paramters describing the period (the inverse
+; of the frequency) and the volume.  After that, you write a value into the
+; length counter bits which describes how many ticks of the frame counter
+; (running at 240 Hz on the 4-frame config used here) the sound should last.
 ;
-; Because the pattern table entries needed to draw the sprite correctly are
-; not arranged in a linear way, I created a little array called "anim" which
-; describes each frame of the animation in a way that's coherent to the
-; algorithm used in load_sprite.  It takes 6 pattern table entries to draw
-; the character, so advancing to the next step in the animation is a matter
-; of adding different multiples of 6 to "anim".
+; Muting a channel can be performed through the DMC_LEN_CNT_CTRL_STA register.
+; The bottom 5 bits enable/disable the length counters for the synthesizers,
+; thus effectively muting them.
 ;
-; To animate, you must change the image as time progresses, meaning you also
-; need a timer.  This is where the other major point of this lab comes in--
-; the non-maskable interrupt (NMI).  The NMI fires every time the PPU starts
-; drawing another frame on the TV screen.  This gives us a "heartbeat" for our
-; code and also serves as a general sense of time.  NTSC refreshes 60 fields
-; (half-frames) per second, so we know that each trigger of the NMI is 1/60th
-; of a second, and we can therefore decide how long to devote to each part
-; of an animation.
-;
-; Also kindly note that we go ahead and do the OAM DMA immediately at the
-; beginning of the NMI hander.  This is because the NMI signals the beginning
-; of something called "vertical blanking" in the NTSC and PAL standards.  The
-; OAM must be ready to go at end of vertical blanking so the image can be put
-; on the screen, so we do it first and make sure we don't delay.  After that,
-; we set up the next frame of animation.
-;
-; Finally...this is the first lab where we need RAM in order to track changing
-; variables!  Astute observers might have noticed that all the memory we've
-; declared up to this point has been RAM.  Since the variables we need are few,
-; I've declared them in the "zero page", which is a RAM region already
-; made available by the cc65 default NES configuration.  This is all a fancy
-; way of saying that the first 256 bytes of addressable space are RAM, and
-; because they're the first 256 bytes, the 6502 can fetch them very quickly.
+; There's enough in this lab to get your feet wet on the APU, but it doesn't
+; cover more advanced topics like sweeps, envelopes, samples, or composing
+; music.
 
 
 .define SPRITE_PAGE  $0200
@@ -69,6 +47,45 @@
 .define ATTRTABLE_0_LO $C0
 .define BGPALETTE_HI   $3F
 .define BGPALETTE_LO   $00
+
+; APU REGISTERS
+
+; Pulse/square generator 1
+.define PULSE_1_DUTY_VOL  $4000
+.define PULSE_1_SWEEP     $4001
+.define PULSE_1_PERIOD_LO $4002
+.define PULSE_1_PERIOD_HI $4003
+
+; Pulse/square generator 2
+.define PULSE_2_DUTY_VOL  $4004
+.define PULSE_2_SWEEP     $4005
+.define PULSE_2_PERIOD_LO $4006
+.define PULSE_2_PERIOD_HI $4007
+
+; Triangle wave generator
+.define TRI_LINEAR_COUNTER $4008
+.define TRI_UNUSED         $4009
+.define TRI_TIMER_LO       $400A
+.define TRI_COUNT_TIMER_HI $400B
+
+; Noise generator
+.define NOISE_ENV_LEN_VOL    $400C
+.define NOISE_UNUSED         $400D
+.define NOISE_MODE_PERIOD    $400E
+.define NOISE_LENGTH_COUNTER $400F
+
+; Delta modulation (sample) player
+.define DMC_FLAGS_RATE      $4010
+.define DMC_VOL_DIRECT_LOAD $4011
+.define DMC_SAMPLE_ADDRESS  $4012
+.define DMC_SAMPLE_LENGTH   $4013
+
+; On write: DMC enable, length counter enable
+; On read: DMC interrupt, frame interrupt, length counter status
+.define DMC_LEN_CNT_CTRL_STA $4015
+
+; Frame counter mode (4 or 5 frame), frame counter interrupt enable/disable
+.define FRAME_CNT_MODE_INT $4017
 
 ; Mandatory iNES header.
 .segment "HEADER"
@@ -178,6 +195,16 @@ zero_oam:
   lda #$1e
   sta PPUMASK
 
+; Initialize the APU.
+  jsr init_apu
+
+; Since we're going to use only one sound in this demo, let's go ahead and
+; configure it.
+
+; Enable noise tone mode, lowest tone supported (deep rumble)
+  lda #$8F
+  sta NOISE_MODE_PERIOD
+
 ; generate NMI
   lda #$80
   sta PPUCTRL
@@ -198,7 +225,7 @@ nmi:
 ; existing sprite.
   inc frame_count
   lda frame_count
-  cmp #15
+  cmp #5
   bne done
   lda #0
   sta frame_count
@@ -210,22 +237,34 @@ nmi:
   adc #6                ; Each frame is an offset of a multiple of 6
   cmp #24               ; After 4 frames, wrap around (4*6 = 24)
   bne dont_cycle_anim
+; Make a little sound on every cycle through the animation
+
+; Load up 2 cycles of the length counter
+  lda #$10
+  sta NOISE_LENGTH_COUNTER
+
+; Full volume, run the length counter
+  lda #$1F
+  sta NOISE_ENV_LEN_VOL
+
+; Reset the animation cycle
   lda #0
+
 dont_cycle_anim:
   sta current_frame
 
 
   lda sprite_x
   clc
-  adc #4
+  adc #2
   sta sprite_x
 dont_reset_x:
   sta sprite_x
+
+
 done:
   jsr load_sprite
   rti                   ; Return from the NMI (NTSC refresh interrupt)
-
-
 
 ; load_sprite consults current_frame to determine the offset into anim
 ; and then draws the data in that row of anim into a 2x3 rectangle
@@ -282,6 +321,85 @@ load_loop:
   rts
 .endproc
 
+; Initialize the Audio Processing Unit (APU)
+; This will load the APU with default values guaranteed
+; to not make sound.
+;
+; It's more effective to do this as a table of bytes and
+; load the registers with a loop, but tis will give us a
+; chance to discuss what they do.
+; 
+; For more details, see the following pages:
+; http://wiki.nesdev.com/w/index.php/APU_basics
+; http://wiki.nesdev.com/w/index.php/APU_registers
+; http://wiki.nesdev.com/w/index.php/APU_DMC
+
+.proc init_apu
+; Note there are 2 pulse (square) wave units, and both are initialized
+; to the same values.
+
+; Duty cycle 0, length counter halted (1), constant volume (1), vol 0
+  lda #$30
+  sta PULSE_1_DUTY_VOL
+  sta PULSE_2_DUTY_VOL
+
+; Sweep not enabled, no period, sweep upward (1), pitch shift step 0
+  lda #$08
+  sta PULSE_1_SWEEP
+  sta PULSE_2_SWEEP
+
+; Period 0 (no waveform)
+  lda #$00
+  sta PULSE_1_PERIOD_LO
+  sta PULSE_1_PERIOD_HI
+  sta PULSE_2_PERIOD_LO
+  sta PULSE_2_PERIOD_HI
+
+; Halt tri linear counter, load 0 into counter
+  lda #$80
+  sta TRI_LINEAR_COUNTER
+
+; Unusued register, 0 out
+  lda #$00
+  sta TRI_UNUSED
+
+; Set frequency timer (frequency control) to 0
+  sta TRI_TIMER_LO
+  sta TRI_COUNT_TIMER_HI
+
+; Length counter halt(1), constant volume(1), envelope period 0
+  lda #$30
+  sta NOISE_ENV_LEN_VOL
+
+; Not used, zero out
+  lda #$00
+  sta NOISE_UNUSED
+
+; Set period and length to 0
+  sta NOISE_MODE_PERIOD
+  sta NOISE_LENGTH_COUNTER
+
+; DMC (sample playback) control
+; No IRQ generation, no loop, frequency 0
+  sta DMC_FLAGS_RATE
+
+; No sample loaded directly to DMC
+  sta DMC_VOL_DIRECT_LOAD
+
+; No sample indirectly in memory, so 0 address and 0 length
+  sta DMC_SAMPLE_ADDRESS
+  sta DMC_SAMPLE_LENGTH
+
+; Disable DMC length counter, enable all 4 synths
+  lda #$0F
+  sta DMC_LEN_CNT_CTRL_STA
+
+; 4x frame (i.e. 240Hz) counter, disable frame counter interrupt
+  lda #$40
+  sta FRAME_CNT_MODE_INT
+
+rts
+.endproc
 
 ; The background colors are, in order:
 ; $0F: black
